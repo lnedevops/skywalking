@@ -1,0 +1,91 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: #APP_NAME
+  labels:
+    app: #APP_NAME
+spec:
+  type: ClusterIP
+  ports:
+    - name: server          #服务端口
+      port: 8080
+      targetPort: 8080
+    - name: management      #监控及监控检查的端口
+      port: 8081
+      targetPort: 8081
+  selector:
+    app: #APP_NAME
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: #APP_NAME
+  labels:
+    app: #APP_NAME
+spec:
+  replicas: #APP_REPLICAS
+  selector:
+    matchLabels:
+      app: #APP_NAME
+  strategy:
+    type: Recreate          #设置更新策略为删除策略
+  template:
+    metadata:
+      labels:
+        app: #APP_NAME
+    spec:
+      imagePullSecrets:
+        - name: aliyun-registry-secret    #镜像拉取秘钥
+      initContainers:
+        - image: registry.cn-hangzhou.aliyuncs.com/fsl-devops/skywalking-agent-sidecar:8.5.0
+          name: skywalking-sidecar
+          command: ["sh"]
+          args: ["-c","mkdir -p /opt/sw/agent && cp -rf /usr/skywalking/agent/* /opt/sw/agent"]
+          volumeMounts:
+            - name: sw-agent
+              mountPath: /opt/sw/agent
+      containers:
+        - name: #APP_NAME
+          image: #APP_IMAGE_NAME
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080   #服务端口
+              name: server
+            - containerPort: 8081   #监控及监控检查的端口
+              name: management
+          env:
+            - name: "update_uuid"
+              value: "#APP_UUID"    #生成的随机值，放置执行kubectl apply时能够执行
+            - name: JAVA_OPTS
+              value: "-javaagent:/opt/sw/agent/skywalking-agent.jar"
+            - name: SW_AGENT_NAME
+              value: "#APP_NAME"
+            - name: SW_AGENT_COLLECTOR_BACKEND_SERVICES
+              value: "skywalking-oap.es.svc:11800"
+          volumeMounts:
+            - mountPath: /opt/sw/agent
+              name: sw-agent
+          resources:
+            limits:
+              cpu: 2000m
+              memory: 1024Mi
+            requests:
+              cpu: 1000m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              port: 8081      #需要提前开启springCloud项目的8081检测端口
+              path: /actuator/health
+            initialDelaySeconds: 120      #等待初始时间为120秒
+            periodSeconds: 5
+            timeoutSeconds: 10
+          livenessProbe:
+            httpGet:
+              port: 8081
+              path: /actuator/health
+            initialDelaySeconds: 60
+            periodSeconds: 5
+            timeoutSeconds: 10
+      volumes:
+        - name: sw-agent
+          emptyDir: {}
